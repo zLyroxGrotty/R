@@ -49,6 +49,7 @@ datos_combinados <- merge(
   all.x = TRUE
 )
 
+View(datos_combinados)
 # Crear logaritmo de la población
 datos_combinados$log_poblacion <- log(datos_combinados$SP.POP.TOTL)
 
@@ -65,4 +66,95 @@ modelo_panel <- plm(
 )
 
 summary(modelo_panel)
+
+modelo_panell <- plm(
+  v2x_rule ~ NY.GDP.PCAP.KD.ZG + SI.POV.GINI + FP.CPI.TOTL.ZG +
+    SE.XPD.TOTL.GD.ZS + IT.NET.USER.ZS + SL.TLF.CACT.FE.ZS +
+    SP.URB.TOTL.IN.ZS + log_poblacion,
+  data = panel_data,
+  model = "within"
+)
+
+summary(modelo_panell)
+
+===========================================================================
+
+library(ggplot2)
+
+ggplot(panel_data, aes(x = NY.GDP.PCAP.KD.ZG, y = v2x_polyarchy, color = country_name)) +
+  geom_point(alpha = 0.6) +
+  geom_smooth(method = "lm", se = FALSE, color = "black", linetype = "dashed") +
+  labs(
+    title = "Relación entre democracia y crecimiento económico (2000-2023)",
+    x = "Crecimiento del PIB per cápita (%)",
+    y = "Índice de democracia (V-Dem: v2x_polyarchy)",
+    color = "País"
+  ) +
+  theme_minimal()
+
+ggplot(panel_data, aes(x = year, y = v2x_polyarchy, color = country_name)) +
+  geom_line(size = 1.2) +
+  geom_point(size = 1.5) +
+  labs(
+    title = "Evolución del índice de democracia (V-Dem) en América Latina",
+    x = "Año",
+    y = "Índice de democracia (v2x_polyarchy)",
+    color = "País"
+  ) +
+  theme_minimal()
+
+
+
+
+
+
+
+# Escalar variables continuas
+vars_escalar <- c("NY.GDP.PCAP.KD.ZG", "SI.POV.GINI", "FP.CPI.TOTL.ZG",
+                  "SE.XPD.TOTL.GD.ZS", "IT.NET.USER.ZS", "SP.POP.TOTL", "SL.TLF.CACT.FE.ZS")
+datos_combinados[vars_escalar] <- lapply(datos_combinados[vars_escalar], scale)
+
+
+# Volver a crear el panel
+panel_data <- pdata.frame(datos_combinados, index = c("country_name", "year"))
+
+# Nuevo modelo con variable de control incluida
+modelo_panel <- plm(
+  v2x_polyarchy ~ NY.GDP.PCAP.KD.ZG + SI.POV.GINI + FP.CPI.TOTL.ZG +
+    SE.XPD.TOTL.GD.ZS + IT.NET.USER.ZS + SP.POP.TOTL + SL.TLF.CACT.FE.ZS,
+  data = panel_data,
+  model = "within"
+)
+
+summary(modelo_panel)
+
+
+===================================================================
+
+
+install.packages("lme4")
+library(lme4)
+
+
+# Modelo multinivel con intercepto aleatorio por país
+modelo_multinivel <- lmer(
+  v2x_polyarchy ~ NY.GDP.PCAP.KD.ZG + SI.POV.GINI + FP.CPI.TOTL.ZG +
+    SE.XPD.TOTL.GD.ZS + IT.NET.USER.ZS + SP.POP.TOTL + SL.TLF.CACT.FE.ZS +
+    (1 | country_name),
+  data = datos_combinados
+)
+
+summary(modelo_multinivel)
+
+modelo_multinivel_2 <- lmer(
+  v2x_polyarchy ~ NY.GDP.PCAP.KD.ZG + SI.POV.GINI + FP.CPI.TOTL.ZG +
+    SE.XPD.TOTL.GD.ZS + IT.NET.USER.ZS + SP.POP.TOTL + SL.TLF.CACT.FE.ZS +
+    (1 + NY.GDP.PCAP.KD.ZG | country_name),
+  data = datos_combinados
+)
+summary(modelo_multinivel_2)
+
+install.packages("performance")
+library(performance)
+icc(modelo_multinivel)
 
