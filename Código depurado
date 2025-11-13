@@ -1,0 +1,68 @@
+# Instalar (solo la primera vez)
+install.packages(c("WDI", "plm", "dplyr", "countrycode", "devtools"))
+
+# Cargar librerías
+library(WDI)
+library(plm)
+library(dplyr)
+library(countrycode)
+library(devtools)
+
+# Instalar paquete de datos V-Dem desde GitHub
+devtools::install_github("vdeminstitute/vdemdata")
+
+# Cargar los datos
+library(vdemdata)
+data("vdem")
+
+datos_wdi <- WDI(
+  country = c("MX", "BR", "AR", "CL", "CO", "PE"),
+  indicator = c(
+    "NY.GDP.PCAP.KD.ZG",   # Crecimiento PIB per cápita
+    "SI.POV.GINI",         # Desigualdad (Gini)
+    "FP.CPI.TOTL.ZG",      # Inflación (%)
+    "SE.XPD.TOTL.GD.ZS",   # Gasto en educación
+    "IT.NET.USER.ZS",      # Internet (% población)
+    "SL.TLF.CACT.FE.ZS",   # Participación laboral femenina (%)
+    "SP.URB.TOTL.IN.ZS",   # Población urbana (%)
+    "SP.POP.TOTL"          # Población total
+  ),
+  start = 2000, end = 2023,
+  extra = TRUE
+)
+
+vdem_sel <- vdem %>%
+  filter(country_text_id %in% c("MEX", "BRA", "ARG", "CHL", "COL", "PER")) %>%
+  select(country_name, country_text_id, year,
+         v2x_polyarchy, v2x_libdem, v2x_rule, v2x_corr)
+
+====================================================================
+
+# Asegurar que el código ISO3 coincida
+datos_wdi$iso3c <- countrycode(datos_wdi$country, "country.name", "iso3c")
+
+# Unir por país y año
+datos_combinados <- merge(
+  datos_wdi, vdem_sel,
+  by.x = c("iso3c", "year"),
+  by.y = c("country_text_id", "year"),
+  all.x = TRUE
+)
+
+# Crear logaritmo de la población
+datos_combinados$log_poblacion <- log(datos_combinados$SP.POP.TOTL)
+
+======================================================================
+
+panel_data <- pdata.frame(datos_combinados, index = c("country_name", "year"))
+
+modelo_panel <- plm(
+  v2x_polyarchy ~ NY.GDP.PCAP.KD.ZG + SI.POV.GINI + FP.CPI.TOTL.ZG +
+    SE.XPD.TOTL.GD.ZS + IT.NET.USER.ZS + SL.TLF.CACT.FE.ZS +
+    SP.URB.TOTL.IN.ZS + log_poblacion,
+  data = panel_data,
+  model = "within"
+)
+
+summary(modelo_panel)
+
