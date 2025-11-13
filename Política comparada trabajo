@@ -1,0 +1,78 @@
+install.packages("WDI")
+library(WDI)
+install.packages("tidyverse")
+library(dplyr)
+
+
+datos <- WDI(country = c("MX", "BR", "AR", "CL", "CO", "PE"),
+             indicator = c("NY.GDP.PCAP.KD.ZG", "NY.GNS.ICTR.ZS"),
+             start = 2000, end = 2023,
+             extra = TRUE)
+
+View(datos)
+
+library(ggplot2)
+ggplot(datos, aes(x = year, y = NY.GDP.PCAP.KD.ZG, color = country)) +
+  geom_line(size = 1.1) +
+  labs(title = "Crecimiento del PIB per cápita (2000-2023)",
+       y = "% crecimiento anual", x = "Año")
+=============================================================================
+
+library(WDI)
+
+datos1 <- WDI(
+  country = c("MX", "BR", "AR", "CL", "CO", "PE"),
+  indicator = c(
+    "NY.GDP.PCAP.KD.ZG",  # Crecimiento PIB per cápita
+    "SE.XPD.TOTL.GD.ZS",  # Gasto en educación (% PIB)
+    "SE.SCH.LIFE",        # Escolaridad esperada
+    "GB.XPD.RSDV.GD.ZS",  # Gasto en I+D
+    "FP.CPI.TOTL.ZG"      # Inflación
+  ),
+  start = 2000, end = 2023,
+  extra = TRUE
+)
+
+View(datos1)
+
+-------------------------------------------------------------------------------
+
+install.packages("plm")
+library(plm)
+
+panel <- pdata.frame(datos1, index = c("iso2c", "year"))
+
+modelo <- plm(NY.GDP.PCAP.KD.ZG ~ SE.XPD.TOTL.GD.ZS + FP.CPI.TOTL.ZG,
+              data = panel,
+              model = "within")  # efectos fijos
+
+summary(modelo)
+
+
+library(ggplot2)
+library(dplyr)
+
+# Normalidad
+plot(density(modelo$residuals))
+shapiro.test(resid(modelo))
+
+# Heterocedasticidad
+library(lmtest)
+bptest(modelo)
+
+# Linealidad
+resettest(modelo, power = 2:3)
+
+# Independencia de residuos
+dwtest(modelo)
+
+install.packages("lmer4")
+library(lmer4)
+
+modelo_ml <- lmer(NY.GDP.PCAP.KD.ZG ~ SE.XPD.TOTL.GD.ZS + FP.CPI.TOTL.ZG + (1 | iso2c),
+                  data = datos)
+summary(modelo_ml)
+================================================================================
+
+example<-WDI(indicator=c("NY.GDP.PCAP.KD.ZG", "NY.GNS.ICTR.ZS"),extra=TRUE)
+View(example)
