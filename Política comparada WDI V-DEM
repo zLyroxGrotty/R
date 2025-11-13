@@ -76,7 +76,9 @@ summary(modelo_ml)
 
 example<-WDI(indicator=c("NY.GDP.PCAP.KD.ZG", "NY.GNS.ICTR.ZS"),extra=TRUE)
 View(example)
+
 *******************************************************************************
+
 # Instala el paquete devtools y luego usa la función install_github() para descargar 
 # el paquete vdemdata desde GitHub.
 # En https://github.com/vdeminstitute/vdemdata se encuentran los datos de V-Dem.
@@ -104,3 +106,130 @@ vdem$continent <- countrycode(vdem$country_name, "country.name", "continent")
 
 # Ver los países con su continente
 unique(vdem[, c("country_name", "continent")])
+
+°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°°
+
+
+datos_wdi <- WDI(
+  country = c("MX", "BR", "AR", "CL", "CO", "PE"),
+  indicator = c(
+    "NY.GDP.PCAP.KD.ZG",  # Crecimiento PIB per cápita
+    "SE.XPD.TOTL.GD.ZS",  # Gasto en educación (% PIB)
+    "FP.CPI.TOTL.ZG"      # Inflación
+  ),
+  start = 2000, end = 2023,
+  extra = TRUE
+)
+
+data("vdem")
+# Filtramos solo las variables de interés (por ejemplo, índice de democracia liberal)
+vdem_filtrado <- vdem %>%
+  filter(country_name %in% c("Mexico", "Brazil", "Argentina", "Chile", "Colombia", "Peru")) %>%
+  select(country_name, year, v2x_polyarchy, v2x_libdem, v2x_freexp_altinf)
+
+# --- 3. Unificar los nombres de países y unir por año ---
+library(dplyr)
+install.packages("countrycode")
+library(countrycode)
+
+vdem_filtrado <- vdem_filtrado %>%
+  mutate(iso2c = countrycode(country_name, "country.name", "iso2c"))
+
+# Unir bases por país y año
+base_final <- merge(datos_wdi, vdem_filtrado, by = c("iso2c", "year"))
+
+View(base_final)
+
+==================================================================================
+
+library(plm)
+
+panel <- pdata.frame(base_final, index = c("iso2c", "year"))
+
+modelo <- plm(v2x_polyarchy ~ NY.GDP.PCAP.KD.ZG + SE.XPD.TOTL.GD.ZS + FP.CPI.TOTL.ZG,
+              data = panel,
+              model = "within")  # efectos fijos por país
+
+summary(modelo)
+
+#Probaré agregando más variables para encontrar la que tenga significancia
+
+datos_dem <- WDI(
+  country = c("MX", "BR", "AR", "CL", "CO", "PE"),
+  indicator = c(
+    "NY.GDP.PCAP.KD.ZG",  # Crecimiento PIB per cápita
+    "SI.POV.GINI",        # Desigualdad (Gini)
+    "SE.XPD.TOTL.GD.ZS",  # Gasto en educación (% PIB)
+    "FP.CPI.TOTL.ZG",     # Inflación (% anual)
+    "IT.NET.USER.ZS",     # Usuarios de internet (% población)
+    "SP.POP.TOTL",        # Población total
+    "SL.TLF.CACT.FE.ZS"   # Participación laboral femenina
+  ),
+  start = 2000, end = 2023,
+  extra = TRUE
+)
+
+View(datos_dem)
+
+vdem_sel <- vdem %>%
+  filter(country_text_id %in% c("MEX", "BRA", "ARG", "CHL", "COL", "PER")) %>%
+  select(
+    country_name, country_text_id, year,
+    v2x_polyarchy,   # Democracia electoral
+    v2x_libdem,      # Democracia liberal
+    v2x_partipdem,   # Democracia participativa
+    v2x_delibdem,    # Democracia deliberativa
+    v2x_egaldem,     # Democracia igualitaria
+    v2x_corr,        # Control de la corrupción
+    v2x_rule,        # Estado de derecho
+  )
+
+datos_combinados <- merge(
+  datos_dem, vdem_sel,
+  by.x = c("iso2c", "year"),
+  by.y = c("country_text_id", "year"),
+  all.x = TRUE
+)
+
+View(datos_combinados)
+
+====
+Datos ajustados
+
+library(dplyr)
+
+vdem_sel <- vdem %>%
+  filter(country_text_id %in% c("MEX", "BRA", "ARG", "CHL", "COL", "PER")) %>%
+  select(
+    country_name, country_text_id, year,
+    v2x_polyarchy, v2x_libdem, v2x_partipdem,
+    v2x_delibdem, v2x_egaldem, v2x_corr, v2x_rule, v2x_regime_osp
+  )
+
+datos_combinados <- merge(
+  datos_dem, vdem_sel,
+  by.x = c("iso3c", "year"),
+  by.y = c("country_text_id", "year"),
+  all.x = TRUE
+)
+
+View(datos_combinados)
+====================
+
+#Ahora sí datos ajustados
+
+install.packages("plm")
+library(plm)
+
+# Convertir a datos de panel
+panel_data <- pdata.frame(datos_combinados, index = c("country_name", "year"))
+
+# Modelo con efectos fijos
+modelo_panel <- plm(
+  v2x_polyarchy ~ NY.GDP.PCAP.KD.ZG + SI.POV.GINI + FP.CPI.TOTL.ZG + SE.XPD.TOTL.GD.ZS + IT.NET.USER.ZS,
+  data = panel_data,
+  model = "within"
+)
+
+summary(modelo_panel)
+
