@@ -144,6 +144,25 @@ modelo_multinivel <- lmer(
   data = datos_combinados
 )
 
+=============================================================================
+=============================================================================
+
+# Modelo multinivel Sin aleatorio
+modelo_multinivel <- lmer(
+  v2x_polyarchy ~ NY.GDP.PCAP.KD.ZG + SI.POV.GINI + FP.CPI.TOTL.ZG +
+    SE.XPD.TOTL.GD.ZS + IT.NET.USER.ZS + SP.POP.TOTL + SL.TLF.CACT.FE.ZS +
+    (1 | country_name),
+  data = datos_combinados
+)
+
+summary(modelo_multinivel)
+
+ranef(modelo_multinivel)
+
+=============================================================================
+=============================================================================
+
+
 summary(modelo_multinivel)
 
 modelo_multinivel_2 <- lmer(
