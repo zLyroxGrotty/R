@@ -1,0 +1,126 @@
+# ---------------------------
+# SCRIPT: 8 dimensiones de Morlino (V-Dem) + análisis multinivel
+# Guardar como: morlino_multinivel.R
+# ---------------------------
+
+# 0) Paquetes (instalar una vez)
+install.packages(c("WDI", "dplyr", "countrycode", "lme4", "lmerTest", "performance"))
+# Si no tienes vdemdata: instalar desde GitHub (solo la primera vez)
+# devtools::install_github("vdeminstitute/vdemdata")
+
+# Cargar librerías
+library(WDI)
+library(dplyr)
+library(countrycode)
+library(lme4)
+library(lmerTest)    
+# p-values para lmer
+library(performance) 
+# icc, diagnósticos
+
+# 1) Cargar V-Dem (ya instalado previamente)
+library(vdemdata)
+data("vdem")   # dataframe: vdem
+
+# 2) Seleccionar variables que representen las 8 dimensiones de Morlino
+# Mapeo sugerido (ajusta si en tu versión hay nombres distintos):
+# Estado de derecho        -> v2x_rule
+# Rendición electoral      -> v2x_polyarchy   (o indicador electoral específico si existe)
+# Rendición interinstit.   -> v2x_corr OR v2x_accountability (usamos v2x_corr como proxy)
+# Participación            -> v2x_partipdem
+# Competencia política     -> v2x_polyarchy (o v2x_competition si existe) -> usamos v2x_polyarchy como proxy
+# Libertad                 -> v2x_libdem
+# Igualdad                 -> v2x_egaldem
+# Responsividad            -> v2x_resp        (o v2x_gov_resp, según tu versión)
+
+vdem_morlino <- vdem %>%
+  select(country_name, country_text_id, year,
+         v2x_rule,        # estado de derecho
+         v2x_polyarchy,   # competencia / electoral
+         v2x_corr,        # control de la corrupción (proxy rendición interinstit.)
+         v2x_partipdem,   # participación
+         v2x_libdem,      # libertades
+         v2x_egaldem,     # igualdad
+         v2x_delibdem) %>%    # responsividad (si tu versión tiene otro nombre ajústalo)
+  filter(country_text_id %in% c("MEX","BRA","ARG","CHL","COL","PER"))  # tus casos
+
+# 3) Revisar nombres por si hay diferencias
+ names(vdem)   # descomenta si necesitas checar nombres disponibles
+
+# 4) (Opcional) Estandarizar variables V-Dem para compararlas
+vars_vdem <- c("v2x_rule","v2x_polyarchy","v2x_corr","v2x_partipdem",
+               "v2x_libdem","v2x_egaldem","v2x_delibdem")
+
+vdem_morlino[vars_vdem] <- lapply(vdem_morlino[vars_vdem], function(x) as.numeric(scale(x)))
+
+# 5) Crear índice agregado (opcional) — promedio estandarizado de las 8 dimensiones
+vdem_morlino <- vdem_morlino %>%
+  rowwise() %>%
+  mutate(morlino_index = mean(c_across(all_of(vars_vdem)), na.rm = TRUE)) %>%
+  ungroup()
+
+# 6) (Opcional) Guardar este objeto V-Dem como fichero separado para tu “otra investigación”
+saveRDS(vdem_morlino, file = "vdem_morlino_8dims.rds")
+
+# 7) Si quieres unir con WDI (controles econó-sociales), descárgalos y combínalos:
+wdi_controles <- WDI(country = c("MX","BR","AR","CL","CO","PE"),
+                     indicator = c("NY.GDP.PCAP.KD.ZG", # crecimiento PIB per cápita
+                                   "SI.POV.GINI",       # Gini
+                                   "SE.XPD.TOTL.GD.ZS", # gasto en educación
+                                   "FP.CPI.TOTL.ZG",    # inflación
+                                   "IT.NET.USER.ZS",    # internet
+                                   "SL.TLF.CACT.FE.ZS", # participación laboral femenina
+                                   "SP.URB.TOTL.IN.ZS", # urbanización
+                                   "SP.POP.TOTL"),      # población total
+                     start = 2000, end = 2023, extra = TRUE)
+View(wdi_controles)
+# Asegurar ISO3 y nombres concordantes
+wdi_controles$iso3c <- countrycode(wdi_controles$country, "country.name", "iso3c")
+vdem_morlino$iso3c <- vdem_morlino$country_text_id  # vdem usa iso3 en country_text_id
+
+# 8) Unir por ISO3 + año
+datos_morlino_estudio <- merge(
+  wdi_controles, vdem_morlino,
+  by.x = c("iso3c","year"),
+  by.y = c("country_text_id","year"),
+  all.x = FALSE, all.y = FALSE
+)
+View(datos_morlino_estudio)
+# 9) Limpiar y crear variables útiles
+datos_morlino_estudio <- datos_morlino_estudio %>%
+  mutate(log_pop = log(SP.POP.TOTL))
+
+# 10) Guardar dataset final (nuevo proyecto)
+saveRDS(datos_morlino_estudio, file = "datos_morlino_estudio.rds")
+# También CSV si prefieres compartir
+write.csv(datos_morlino_estudio, "datos_morlino_estudio.csv", row.names = FALSE)
+
+# 11) MODELO MULTINIVEL: democracia (v2x_polyarchy) por país (intercepto aleatorio)
+#    - Fixed effects: las 8 dimensiones (ya estandarizadas)
+#    - Random intercept por país
+library(lme4)
+library(lmerTest)
+
+modelo_8dims <- lmer(
+  v2x_polyarchy ~ v2x_rule + v2x_corr + v2x_partipdem + v2x_libdem +
+    v2x_egaldem + v2x_delibdem + v2x_polyarchy +   # v2x_polyarchy está aquí si quieres ver relación con subcomponentes; OJO: puede ser redundante
+    NY.GDP.PCAP.KD.ZG + SI.POV.GINI + SE.XPD.TOTL.GD.ZS +
+    IT.NET.USER.ZS + SL.TLF.CACT.FE.ZS + SP.URB.TOTL.IN.ZS + log_pop +
+    (1 | iso3c),   # intercepto aleatorio por país (iso3c)
+  data = datos_morlino_estudio,
+  REML = TRUE
+)
+
+
+summary(modelo_8dims)
+
+# 12) Efectos aleatorios por país (intercepts)
+ranef(modelo_8dims)
+
+# 13) ICC (qué proporción de la varianza está entre países)
+icc(modelo_8dims)
+
+# 14) Guardar resultados del modelo (objeto R)
+saveRDS(modelo_8dims, file = "modelo_8dims_multinivel.rds")
+
+# ---------- FIN del script ----------
