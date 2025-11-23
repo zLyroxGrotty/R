@@ -1,0 +1,333 @@
+# Instalar paquetes si faltan
+packages <- c("WDI", "tidyverse", "vdemdata", "countrycode", "plm", "lme4", "lmerTest", "performance")
+install.packages(setdiff(packages, installed.packages()[,"Package"]))
+install.packages("lmerTest")
+# Cargar
+library(WDI)
+library(tidyverse)
+library(vdemdata)
+library(countrycode)
+library(plm)
+library(lme4)
+library(lmerTest)
+library(performance)
+
+paises <- c(
+  "Argentina", "Bolivia", "Brazil", "Chile", "Colombia", "Costa Rica", "Ecuador",
+  "El Salvador", "Guatemala", "Honduras", "Mexico", "Nicaragua", "Panama",
+  "Paraguay", "Peru", "Uruguay", "Venezuela"
+)
+
+iso2 <- countrycode(paises, "country.name", "iso2c")
+iso3 <- countrycode(paises, "country.name", "iso3c")
+
+View(iso3)
+
+indicadores_wdi <- c(
+  "NY.GDP.PCAP.KD.ZG",     # Crecimiento PIB per cápita
+  "SI.POV.GINI",           # Desigualdad
+  "FP.CPI.TOTL.ZG",        # Inflación
+  "SE.XPD.TOTL.GD.ZS",     # Gasto en educación
+  "IT.NET.USER.ZS",        # Internet
+  "SP.POP.TOTL"            # Población total (variable de control)
+)
+
+wdi_data <- WDI(
+  country = iso2,
+  indicator = indicadores_wdi,
+  start = 2000,
+  end = 2023
+) %>%
+  rename(iso2c = iso2c)
+
+View(wdi_data)
+
+
+vdem_sel <- vdem %>%
+  filter(country_text_id %in% iso3, year >= 2000) %>%
+  select(
+    country_name, country_text_id, year,
+    # Poliarchía de Dahl (concepto central)
+    v2x_polyarchy,
+    
+    # Dimensiones de calidad democrática según Morlino:
+    # 1. Estado de Derecho
+    v2x_rule,
+    # 2. Participación  
+    v2x_partipdem,
+    # 3. Competición (elecciones libres y justas)
+    v2xel_frefair,
+    # 4. Igualdad
+    v2x_egal,
+    # 5. Libertades
+    v2x_libdem,
+    # 6. Rendición de cuentas horizontal (existe en V-Dem)
+    v2x_horacc,
+    # 7. Control de corrupción
+    v2x_corr,
+    # 8. Rendición de cuentas vertical (alternativa)
+    v2xel_elecpres
+  ) %>%
+  rename(iso3c = country_text_id)
+
+# Verificar que ahora funciona
+head(vdem_sel)
+
+
+# PRIMERO: Preparar mejor los datos WDI antes del merge
+wdi_preparado <- wdi_data %>%
+  mutate(
+    iso3c = countrycode(iso2c, "iso2c", "iso3c"),  # Convertir a ISO3c
+    log_poblacion = log(SP.POP.TOTL)  # Transformación útil para modelos
+  ) %>%
+  select(-country, -iso2c)  # Eliminar columnas redundantes
+
+# SEGUNDO: Unir los datasets
+data_full <- vdem_sel %>%
+  left_join(wdi_preparado, by = c("iso3c", "year"))
+head(data_full)
+==================================================================================
+
+# Gráfico de evolución de la poliarchía por país (2010-2022)
+evolucion_democracia <- data_full %>%
+  filter(year >= 2010) %>%
+  ggplot(aes(x = year, y = v2x_polyarchy, color = country_name, group = country_name)) +
+  geom_line(linewidth = 1) +
+  geom_point(size = 1) +
+  labs(
+    title = "Evolución de la Calidad Democrática en América Latina (2010-2022)",
+    subtitle = "Índice de Poliarchía de Dahl - V-Dem",
+    x = "Año",
+    y = "Poliarchía (0-1)",
+    color = "País"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "bottom") +
+  scale_x_continuous(breaks = seq(2010, 2022, 2))
+
+print(evolucion_democracia)
+
+
+variables_correlacion <- data_full %>%
+  filter(year >= 2010) %>%
+  select(
+    v2x_polyarchy,        # Variable dependiente: estabilidad democrática
+    # Dimensiones institucionales (Morlino)
+    v2x_rule,            # Estado de derecho
+    v2x_partipdem,       # Participación
+    v2x_horacc,          # Rendición de cuentas
+    v2x_corr,            # Control de corrupción
+    # Variables socioeconómicas
+    NY.GDP.PCAP.KD.ZG,   # Crecimiento económico
+    SI.POV.GINI,         # Desigualdad
+    IT.NET.USER.ZS       # Conectividad digital
+  )
+
+# Matriz de correlaciones
+correlaciones <- cor(variables_correlacion, use = "complete.obs")
+print("Correlaciones con poliarchía:")
+round(correlaciones["v2x_polyarchy", ], 3)
+
+# Filtrar período de estudio y verificar datos balanceados
+data_panel <- data_full %>%
+  filter(year >= 2010 & year <= 2022) %>%
+  arrange(country_name, year)
+
+# Verificar si el panel está balanceado
+print("Estructura del panel:")
+table(data_panel$country_name, data_panel$year) %>% 
+  head(10)
+
+# Estadísticas descriptivas por país
+estadisticas_paises <- data_panel %>%
+  group_by(country_name) %>%
+  summarise(
+    observaciones = n(),
+    media_poliarquia = mean(v2x_polyarchy, na.rm = TRUE),
+    sd_poliarquia = sd(v2x_polyarchy, na.rm = TRUE),
+    media_crecimiento = mean(NY.GDP.PCAP.KD.ZG, na.rm = TRUE),
+    media_desigualdad = mean(SI.POV.GINI, na.rm = TRUE)
+  )
+
+print(estadisticas_paises)
+
+# Modelo base con dimensiones institucionales
+modelo_fe <- plm(v2x_polyarchy ~ v2x_rule + v2x_partipdem + v2x_horacc + v2x_corr,
+                 data = data_panel,
+                 index = c("country_name", "year"),
+                 model = "within")
+
+summary(modelo_fe)
+
+# Modelo completo
+modelo_completo <- plm(v2x_polyarchy ~ v2x_rule + v2x_partipdem + v2x_horacc + 
+                        v2x_corr + NY.GDP.PCAP.KD.ZG + SI.POV.GINI + IT.NET.USER.ZS,
+                      data = data_panel,
+                      index = c("country_name", "year"),
+                      model = "within")
+
+summary(modelo_completo)
+
+modelo_re <- plm(v2x_polyarchy ~ v2x_rule + v2x_partipdem + v2x_horacc + 
+                  v2x_corr + NY.GDP.PCAP.KD.ZG + SI.POV.GINI + IT.NET.USER.ZS,
+                data = data_panel,
+                index = c("country_name", "year"),
+                model = "random")
+summary(modelo_re)
+# Test de Hausman para elegir entre FE y RE
+hausman_test <- phtest(modelo_fe, modelo_re)
+print(hausman_test)
+
+# Gráfico de dispersión con línea de tendencia
+ggplot(data_panel, aes(x = v2x_partipdem, y = v2x_polyarchy)) +
+  geom_point(aes(color = country_name)) +
+  geom_smooth(method = "lm", se = FALSE) +
+  labs(title = "Relación entre Participación Democrática y Poliarchía",
+       subtitle = "Correlación: 0.951")
+
+===
+
+modelo_multinivel <- lmer(v2x_polyarchy ~ v2x_rule + v2x_partipdem + v2x_horacc + 
+                          v2x_corr + NY.GDP.PCAP.KD.ZG + IT.NET.USER.ZS + 
+                          (1 | country_name), 
+                        data = data_panel)
+summary(modelo_multinivel)
+
+
+# Crear variables dummy para efectos fijos
+modelo_lm_fe <- lm(v2x_polyarchy ~ v2x_rule + v2x_partipdem + v2x_horacc + 
+                   v2x_corr + NY.GDP.PCAP.KD.ZG + IT.NET.USER.ZS +
+                   factor(country_name),
+                 data = data_panel)
+
+summary(modelo_lm_fe)
+
+# Ahora sí calcular efectos marginales
+library(margins)
+marginal_effects <- margins(modelo_lm_fe)
+summary(marginal_effects)
+
+# Gráfico de coeficientes del modelo completo
+coeficientes <- data.frame(
+  variable = c("Estado derecho", "Participación", "Rendición cuentas", 
+               "Control corrupción", "Crecimiento", "Internet"),
+  coef = c(0.4085, 0.9161, -0.0236, 0.2471, 0.00073, 0.00027),
+  se = c(0.0647, 0.0402, 0.0080, 0.0593, 0.00032, 0.00012)
+)
+
+ggplot(coeficientes, aes(x = variable, y = coef)) +
+  geom_point() +
+  geom_errorbar(aes(ymin = coef - 1.96*se, ymax = coef + 1.96*se), width = 0.2) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
+  coord_flip() +
+  labs(title = "Coeficientes del Modelo de Efectos Fijos",
+       subtitle = "Variables que explican la estabilidad democrática")
+
+# Gráfico de coeficientes del modelo principal
+coeficientes_principal <- data.frame(
+  variable = c("Participación", "Estado derecho", "Control corrupción", "Rendición cuentas"),
+  coef = c(0.9161, 0.4085, 0.2471, -0.0236),
+  se = c(0.0402, 0.0647, 0.0593, 0.0080)
+)
+
+ggplot(coeficientes_principal, aes(x = reorder(variable, coef), y = coef)) +
+  geom_col(fill = "steelblue", alpha = 0.8) +
+  geom_errorbar(aes(ymin = coef - 1.96*se, ymax = coef + 1.96*se), width = 0.2) +
+  geom_hline(yintercept = 0, color = "red", linetype = "dashed") +
+  coord_flip() +
+  labs(title = "Determinantes de la Estabilidad Democrática en América Latina",
+       subtitle = "Coeficientes del Modelo de Efectos Fijos (2010-2022)",
+       x = "",
+       y = "Efecto sobre Poliarchía") +
+  theme_minimal()
+
+
+
+
+
+
+# Verificar correlaciones entre todas las dimensiones
+correlaciones_completas <- data_panel %>%
+  select(v2x_polyarchy, v2x_rule, v2x_partipdem, v2xel_frefair, 
+         v2x_egal, v2x_libdem, v2x_horacc, v2x_corr, v2xel_elecpres) %>%
+  cor(use = "complete.obs")
+
+print("Correlaciones entre dimensiones de Morlino:")
+round(correlaciones_completas, 3)
+
+======================================================================================
+======================================================================================
+
+# Correlaciones problemáticas (> 0.90 indican multicolinealidad severa)
+correlaciones_problematicas <- data.frame(
+  Par = c("Polyarchy-Libdem", "Polyarchy-Particip", "Rule-Libdem", 
+          "Rule-Horacc", "Libdem-Horacc"),
+  Correlación = c(0.974, 0.962, 0.972, 0.938, 0.940),
+  Problema = c("Muy alta", "Muy alta", "Muy alta", "Muy alta", "Muy alta")
+)
+print(correlaciones_problematicas)
+
+
+modelo_electoral <- plm(v2x_polyarchy ~ v2xel_frefair + v2xel_elecpres,
+                       data = data_panel, model = "within")
+summary(modelo_electoral)
+
+modelo_liberal <- plm(v2x_polyarchy ~ v2x_rule + v2x_libdem,
+                     data = data_panel, model = "within")
+summary(modelo_liberal)
+
+
+modelo_participativo <- plm(v2x_polyarchy ~ v2x_partipdem + v2x_egal,
+                           data = data_panel, model = "within")
+summary(modelo_participativo)
+
+modelo_accountability <- plm(v2x_polyarchy ~ v2x_horacc + v2x_corr,
+                            data = data_panel, model = "within")
+summary(modelo_accountability)
+
+# Elegir la dimensión con mayor poder explicativo individual
+modelo_mixto <- plm(v2x_polyarchy ~ v2x_partipdem + NY.GDP.PCAP.KD.ZG + 
+                     IT.NET.USER.ZS + SI.POV.GINI,
+                   data = data_panel, model = "within")
+summary(modelo_mixto)
+
+
+# Test VIF para confirmar
+modelo_test <- lm(v2x_polyarchy ~ v2x_rule + v2x_partipdem + v2x_libdem +
+                   v2x_horacc, data = data_panel)
+if("car" %in% installed.packages()) {
+  library(car)
+  print("Factor de Inflación de Varianza (VIF):")
+  print(vif(modelo_test))
+} else {
+  print("Instala el paquete 'car' para ver VIFs > 10 indican multicolinealidad severa")
+}
+
+
+
+install.packages("stargazer")
+# Tabla comparativa de modelos
+library(stargazer)
+stargazer(modelo_electoral, modelo_liberal, modelo_participativo, modelo_mixto,
+          type = "text",
+          title = "Determinantes de la Estabilidad Democrática - Modelos por Bloques Teóricos",
+          dep.var.labels = "Poliarchía (V-Dem)",
+          covariate.labels = c("Elecciones libres", "Competencia electoral",
+                              "Estado derecho", "Libertades democráticas",
+                              "Participación", "Igualdad",
+                              "Crecimiento PIB", "Usuarios Internet", "Desigualdad"))
+
+# Gráfico de R² por modelo teórico
+r2_data <- data.frame(
+  Modelo = factor(c("Participativo", "Liberal", "Electoral", "Accountability"), 
+                 levels = c("Accountability", "Electoral", "Liberal", "Participativo")),
+  R_Cuadrado = c(0.883, 0.812, 0.635, 0.174)
+)
+
+ggplot(r2_data, aes(x = Modelo, y = R_Cuadrado)) +
+  geom_col(fill = "steelblue") +
+  coord_flip() +
+  labs(title = "Poder Explicativo de Diferentes Dimensiones de la Democracia",
+       subtitle = "R² en modelos de efectos fijos (2010-2022)",
+       y = "R Cuadrado") +
+  theme_minimal()
